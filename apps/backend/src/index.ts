@@ -1,22 +1,19 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import type { Bindings, Variables } from './types';
+import auth from './routes/auth';
 
-// Define environment bindings
-type Bindings = {
-  AI: any;
-  DB: D1Database;
-};
+const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
-const app = new Hono<{ Bindings: Bindings }>();
-
-// Enable CORS for frontend communication
 app.use('/api/*', cors());
 
 app.get('/', (c) => c.text('CloudFinance AI API is online!'));
 
+app.route('/api/auth', auth);
+
 /**
  * POST /api/analyze
- * Extracts data from text using Llama 3.3 and saves it to D1
+ * Extracts data from text using Llama 3.1 and saves it to D1
  */
 app.post('/api/analyze', async (c) => {
   try {
@@ -24,12 +21,11 @@ app.post('/api/analyze', async (c) => {
 
     if (!text) return c.json({ error: 'No text provided' }, 400);
 
-    // 1. Inferences with Workers AI
     const aiResponse: any = await c.env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
       messages: [
         {
           role: 'system',
-          content: `You are a financial data assistant. Extract info into JSON: 
+          content: `You are a financial data assistant. Extract info into JSON:
       {"amount": number, "description": "string", "category": "Food|Transport|Shopping|Other", "is_anomaly": boolean}.
       Respond ONLY with raw JSON.`
         },
@@ -37,15 +33,13 @@ app.post('/api/analyze', async (c) => {
       ],
     });
 
-    // 2. Parse AI response (Safe extraction)
     const responseText = aiResponse.response || aiResponse;
     const jsonMatch = responseText.match(/\{.*\}/s);
-    if (!jsonMatch) throw new Error("AI failed to return valid JSON");
+    if (!jsonMatch) throw new Error('AI failed to return valid JSON');
     const data = JSON.parse(jsonMatch[0]);
 
-    // 3. Persist in D1 Database
     await c.env.DB.prepare(
-      `INSERT INTO transactions (amount, description, category, is_anomaly) 
+      `INSERT INTO transactions (amount, description, category, is_anomaly)
        VALUES (?, ?, ?, ?)`
     )
       .bind(data.amount, data.description, data.category, data.is_anomaly ? 1 : 0)

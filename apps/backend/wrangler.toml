@@ -9,6 +9,7 @@ binding = "AI"
 
 # Cloudflare D1 Database binding
 [[d1_databases]]
-binding = "DB" 
+binding = "DB"
 database_name = "cf_ai_db"
 database_id = "b33d2258-53be-4cfa-80a5-ac8535c2539a"
+migrations_dir = "src/db/migrations"
