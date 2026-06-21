@@ -10,7 +10,7 @@ Read this file at the start of every session, after reading `DEVELOPMENT.md`.
 |---|---|---|
 | Phase 0 — Audit & Documentation | **COMPLETE** | PROMPTS.md deleted, audit done, management files created, specs written |
 | Phase 1 — Auth System | **COMPLETE** | JWT auth deployed to production, migration 0001 applied |
-| Phase 2 — Transaction Persistence & CSV Export | Not started | Blocked on Phase 1 |
+| Phase 2 — Transaction Persistence & CSV Export | **COMPLETE** | Migration 0002 applied, all routes deployed |
 | Phase 3 — Frontend Integration & UI Polish | Not started | Blocked on Phase 2 |
 | Phase 4 — Polish, README & Deployment | Not started | Blocked on Phase 3 |
 
@@ -138,22 +138,54 @@ CREATE TABLE transactions (
 - Revoked refresh token → 401
 - Logout → 200 always
 
-## Next Steps — Phase 2 (Transaction Persistence & CSV Export)
+## Phase 2 — Completed
+
+**Files added/modified:**
+- `apps/backend/src/db/migrations/0002_add_user_columns.sql` — ALTER TABLE: adds `user_id TEXT` + `type TEXT` + 2 indexes
+- `apps/backend/src/routes/transactions.ts` — GET (paginated, filterable), GET /summary, POST, DELETE /:id (auth-protected, ownership-checked)
+- `apps/backend/src/routes/export.ts` — GET /csv (auth-protected, in-memory CSV, correct Content-Type + Content-Disposition)
+- `apps/backend/src/index.ts` — removed old public GET /api/transactions, mounted new routes, updated POST /api/analyze with optional JWT user_id
+
+**Decisions logged:**
+- `transactions.id` kept as INTEGER AUTOINCREMENT (can't non-destructively change to TEXT UUID); spec adaptation documented
+- `POST /api/analyze` is optionally authenticated — saves with user_id from JWT if present, NULL if not (backward compat for existing frontend)
+
+**Production state:**
+- Migration 0002 applied to remote D1 (user_id + type columns + indexes on transactions)
+- Worker deployed: `https://backend.raulherreradelgadillo09.workers.dev`
+- Verified: register → POST /api/transactions → GET /api/transactions → GET /api/export/csv all working in production
+
+**Verified locally and in production:**
+- GET /api/transactions returns only current user's transactions (not others') ✅
+- GET /api/transactions unauthenticated → 401 ✅
+- Pagination (?page=1&limit=1) ✅
+- Filter by type (?type=expense) ✅
+- GET /api/transactions/summary → aggregated totals ✅
+- POST /api/transactions → 201 with created row ✅
+- DELETE /api/transactions/:id → 200, ownership-checked ✅
+- DELETE non-existent → 404 ✅
+- DELETE another user's transaction → 403 ✅
+- Validation errors (bad amount) → 400 with field key ✅
+- GET /api/export/csv → 200 with correct headers and RFC 4180 CSV ✅
+- GET /api/export/csv unauthenticated → 401 ✅
+
+## Next Steps — Phase 3 (Frontend Integration & UI Polish)
 
 **Requires explicit approval before starting.**
 
-Phase 2 will:
-1. Run grill-me decision tree (4 decisions)
-2. Confirm `specs/transaction-persistence.md` and `specs/csv-export.md` are complete
-3. Create migration `0002_add_user_columns.sql` (ALTER TABLE transactions: add user_id + type columns + indexes)
-4. Update `POST /api/analyze` — attach `user_id` from JWT if token present
-5. Update `GET /api/transactions` — protected, returns only current user's transactions, with pagination + filters
-6. Add `POST /api/transactions` — protected, creates transaction for current user
-7. Add `DELETE /api/transactions/:id` — protected, ownership-checked delete
-8. Add `GET /api/transactions/summary` — protected, aggregated totals for AI analysis
-9. Create `apps/backend/src/routes/export.ts` — `GET /api/export/csv`
+Phase 3 will:
+1. Run grill-me decision tree (4 decisions: token storage, refresh interceptor, route protection, component strategy)
+2. Install react-router-dom, Zustand, lucide-react in `apps/frontend`
+3. Create `useAuth` hook (Zustand store: in-memory token, login, logout, register, auto-refresh on 401)
+4. Create `LoginForm` and `RegisterForm` components at `/login` and `/register`
+5. Add route protection — redirect to /login if unauthenticated
+6. Update Header: show user name/email + Logout when authenticated
+7. Create `TransactionHistory` component: table with pagination, filters, delete, empty state
+8. Create `ExportButton` component: download CSV with loading state
+9. Update AI analyze flow: send Bearer token so transactions save under the user's account
+10. Apply ui-ux-pro-max checklist before marking done
 
-**Deliverable:** Authenticated user can CRUD their own transactions, AI analysis uses real user data, CSV export works end-to-end.
+**Deliverable:** Full user flow works end-to-end: register → login → add transactions → view history → export CSV → logout.
 
 ---
 
