@@ -9,7 +9,7 @@ Read this file at the start of every session, after reading `DEVELOPMENT.md`.
 | Phase | Status | Notes |
 |---|---|---|
 | Phase 0 — Audit & Documentation | **COMPLETE** | PROMPTS.md deleted, audit done, management files created, specs written |
-| Phase 1 — Auth System | Not started | Requires explicit approval to begin |
+| Phase 1 — Auth System | **COMPLETE** | JWT auth deployed to production, migration 0001 applied |
 | Phase 2 — Transaction Persistence & CSV Export | Not started | Blocked on Phase 1 |
 | Phase 3 — Frontend Integration & UI Polish | Not started | Blocked on Phase 2 |
 | Phase 4 — Polish, README & Deployment | Not started | Blocked on Phase 3 |
@@ -109,21 +109,51 @@ CREATE TABLE transactions (
 
 ---
 
-## Next Steps — Phase 1 (Auth System)
+## Phase 1 — Completed
+
+**Files added/modified:**
+- `apps/backend/src/types.ts` — shared `Bindings` (AI, DB, JWT_SECRET) and `Variables` (user) types
+- `apps/backend/src/utils/jwt.ts` — `signAccessToken` (HMAC-SHA256) and `verifyJWT` (Web Crypto only)
+- `apps/backend/src/utils/crypto.ts` — PBKDF2 password hash/verify, SHA-256 token hash
+- `apps/backend/src/middleware/auth.ts` — Hono `authMiddleware` using `createMiddleware` from `hono/factory`
+- `apps/backend/src/routes/auth.ts` — 5 routes: register, login, refresh, logout, me
+- `apps/backend/src/db/migrations/0001_create_auth_tables.sql` — users + refresh_tokens tables
+- `apps/backend/wrangler.toml` — added `migrations_dir = "src/db/migrations"`
+- `apps/backend/src/index.ts` — mounted auth routes at `/api/auth`, updated Bindings type
+
+**Production state:**
+- Migration 0001 applied to remote D1 (users + refresh_tokens tables created)
+- `JWT_SECRET` set via `wrangler secret put`
+- Worker deployed: `https://backend.raulherreradelgadillo09.workers.dev`
+- Test user created in production: `phase1test@example.com`
+
+**Verified locally and in production:**
+- Register → 201 with JWT pair
+- Login → 200 with JWT pair
+- /me with valid token → 200 user object
+- /me without token → 401
+- Duplicate email → 409
+- Invalid credentials → 401
+- Refresh → 200 new pair, old token revoked
+- Revoked refresh token → 401
+- Logout → 200 always
+
+## Next Steps — Phase 2 (Transaction Persistence & CSV Export)
 
 **Requires explicit approval before starting.**
 
-Phase 1 will:
+Phase 2 will:
 1. Run grill-me decision tree (4 decisions)
-2. Confirm `specs/auth.md` is complete
-3. Add `migrations_dir` to `wrangler.toml`
-4. Create migration `0001_create_users.sql` (users + refresh_tokens tables)
-5. Create `apps/backend/src/middleware/auth.ts` (JWT validation)
-6. Create `apps/backend/src/routes/auth.ts` (register, login, refresh, logout, me)
-7. Wire auth routes into `apps/backend/src/index.ts`
-8. Apply migrations locally, verify with wrangler dev
+2. Confirm `specs/transaction-persistence.md` and `specs/csv-export.md` are complete
+3. Create migration `0002_add_user_columns.sql` (ALTER TABLE transactions: add user_id + type columns + indexes)
+4. Update `POST /api/analyze` — attach `user_id` from JWT if token present
+5. Update `GET /api/transactions` — protected, returns only current user's transactions, with pagination + filters
+6. Add `POST /api/transactions` — protected, creates transaction for current user
+7. Add `DELETE /api/transactions/:id` — protected, ownership-checked delete
+8. Add `GET /api/transactions/summary` — protected, aggregated totals for AI analysis
+9. Create `apps/backend/src/routes/export.ts` — `GET /api/export/csv`
 
-**Deliverable:** `wrangler dev` locally — register → login → JWT → `/api/auth/me` all working.
+**Deliverable:** Authenticated user can CRUD their own transactions, AI analysis uses real user data, CSV export works end-to-end.
 
 ---
 
