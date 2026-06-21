@@ -110,6 +110,4 @@ cf_ai_cloudfinance/
 
 ---
 
-**Author:** Raul Herrera  
-Computer Systems Engineering — Universidad Lamar (2024–2026)  
-Data Analysis Specialization — TripleTen Bootcamp (2025–2026)
+
