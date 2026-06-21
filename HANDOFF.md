@@ -11,7 +11,7 @@ Read this file at the start of every session, after reading `DEVELOPMENT.md`.
 | Phase 0 — Audit & Documentation | **COMPLETE** | PROMPTS.md deleted, audit done, management files created, specs written |
 | Phase 1 — Auth System | **COMPLETE** | JWT auth deployed to production, migration 0001 applied |
 | Phase 2 — Transaction Persistence & CSV Export | **COMPLETE** | Migration 0002 applied, all routes deployed |
-| Phase 3 — Frontend Integration & UI Polish | Not started | Blocked on Phase 2 |
+| Phase 3 — Frontend Integration & UI Polish | **COMPLETE** | Auth UI, protected routes, TransactionHistory, ExportButton deployed |
 | Phase 4 — Polish, README & Deployment | Not started | Blocked on Phase 3 |
 
 ---
@@ -169,23 +169,52 @@ CREATE TABLE transactions (
 - GET /api/export/csv → 200 with correct headers and RFC 4180 CSV ✅
 - GET /api/export/csv unauthenticated → 401 ✅
 
-## Next Steps — Phase 3 (Frontend Integration & UI Polish)
+## Phase 3 — Completed
+
+**Files added/modified:**
+- `apps/frontend/package.json` — added react-router-dom v7, zustand, lucide-react
+- `apps/frontend/src/lib/api.ts` — `apiFetch` interceptor (auto-refresh on 401), `decodeJWT`, `API_URL`
+- `apps/frontend/src/store/auth.ts` — Zustand store; access token in memory, refresh token in localStorage (`cf_refresh_token`)
+- `apps/frontend/src/components/AuthBootstrap.tsx` — silently exchanges stored refresh token on page load
+- `apps/frontend/src/components/ProtectedRoute.tsx` — shows loading spinner if bootstrapping, redirects to /login if unauthenticated
+- `apps/frontend/src/components/Auth/LoginForm.tsx` — email + password, Lucide icons, `[role="alert"]` error display
+- `apps/frontend/src/components/Auth/RegisterForm.tsx` — name + email + password + confirm, field-level errors with `aria-describedby`
+- `apps/frontend/src/components/Transactions/TransactionHistory.tsx` — paginated table, inline add/delete, type filters (income/expense), empty state
+- `apps/frontend/src/components/Transactions/ExportButton.tsx` — CSV download via blob URL, Lucide Download icon
+- `apps/frontend/src/pages/LoginPage.tsx` — glassmorphism card on dark background
+- `apps/frontend/src/pages/RegisterPage.tsx` — same visual style as LoginPage
+- `apps/frontend/src/pages/DashboardPage.tsx` — full dashboard with user header, logout, AI analyze, summary cards, chart, TransactionHistory, ExportButton
+- `apps/frontend/src/App.tsx` — React Router with BrowserRouter, AuthBootstrap wrapper, ProtectedRoute on /
+- `apps/frontend/public/_redirects` — `/* /index.html 200` for Cloudflare Pages SPA routing
+
+**Production state:**
+- Frontend deployed to Cloudflare Pages: `https://cloudfinance-ai.pages.dev`
+- Latest deployment hash: `https://72fb8ff8.cloudfinance-ai.pages.dev`
+- All animations use `motion-safe:` prefix (prefers-reduced-motion compliant)
+- All interactive elements have `min-h-[44px]` touch targets
+- 375px viewport tested — layout adapts correctly
+
+**Verified via Playwright (headless Chromium):**
+- `/ → /login` redirect (ProtectedRoute working) ✅
+- Register → dashboard (201, user name + email in header) ✅
+- Add transaction inline form → row appears in table ✅
+- Export CSV button present ✅
+- Delete transaction → row removed ✅
+- Logout → /login ✅
+- Invalid login → inline `[role="alert"]` error ✅
+- Correct login → dashboard ✅
+- 375px responsive: inputs and buttons render correctly ✅
+
+## Next Steps — Phase 4 (Polish, README & Deployment)
 
 **Requires explicit approval before starting.**
 
-Phase 3 will:
-1. Run grill-me decision tree (4 decisions: token storage, refresh interceptor, route protection, component strategy)
-2. Install react-router-dom, Zustand, lucide-react in `apps/frontend`
-3. Create `useAuth` hook (Zustand store: in-memory token, login, logout, register, auto-refresh on 401)
-4. Create `LoginForm` and `RegisterForm` components at `/login` and `/register`
-5. Add route protection — redirect to /login if unauthenticated
-6. Update Header: show user name/email + Logout when authenticated
-7. Create `TransactionHistory` component: table with pagination, filters, delete, empty state
-8. Create `ExportButton` component: download CSV with loading state
-9. Update AI analyze flow: send Bearer token so transactions save under the user's account
-10. Apply ui-ux-pro-max checklist before marking done
-
-**Deliverable:** Full user flow works end-to-end: register → login → add transactions → view history → export CSV → logout.
+Phase 4 will:
+1. Rewrite `README.md` (portfolio-quality: live demo link, screenshot, tech stack, demo credentials, setup in ≤8 commands)
+2. Seed demo user `demo@cloudfinance.dev` with 15–20 realistic transactions in production D1
+3. Consider Pages URL cleanup (the hash prefix `84b5031a.` comes from direct wrangler deploys — git-connected deploy gives a clean URL)
+4. Final deploy verification: register, login as demo user, AI analysis, CSV download, logout
+5. Update HANDOFF.md with demo credentials and verification checklist
 
 ---
 
