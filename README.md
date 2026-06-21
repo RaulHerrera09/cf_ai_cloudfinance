@@ -1,101 +1,115 @@
-# cf_ai_cloudfinance 💸
+# CloudFinance AI
 
-An AI-powered financial assistant built entirely on **Cloudflare's Global Network**. This application leverages Large Language Models (LLMs) to analyze personal spending from natural language, categorize expenses automatically, and detect financial anomalies in real-time.
+A full-stack financial assistant running entirely on **Cloudflare's global edge network**. Natural language input is parsed by a Llama 3.1 LLM, structured transactions are persisted per-user in a SQLite edge database, and the dashboard renders spending analytics in real time.
 
-## 🚀 Cloudflare Tech Stack
-
-| Component | Technology | Description |
-| :--- | :--- | :--- |
-| **LLM** | Workers AI | Powered by `@cf/meta/llama-3.1-8b-instruct` for NLP extraction. |
-| **Coordination** | Cloudflare Workers | Serverless backend logic using the **Hono** framework. |
-| **Frontend** | Cloudflare Pages | Interactive React SPA built with **Vite** and **Tailwind CSS v4**. |
-| **Memory / State** | Cloudflare D1 | Serverless SQL database (SQLite) for persistent transaction storage. |
-
-## ✨ Key Features
-
-- **Natural Language Processing (NLP)**: Process unstructured text like *"I spent 45 dollars on a burger today"* to extract structured data.
-- **Data Insights & Visualization**: Real-time spending distribution charts using **Recharts** to visualize category weight.
-- **Automated Categorization**: Intelligent grouping of expenses into categories (Food, Transport, Utilities, Shopping, etc.).
-- **Anomaly Detection**: AI-driven logic to flag unusual spending patterns or high-value transactions based on user history.
-- **Edge Performance**: Low-latency execution thanks to Cloudflare's global edge network.
-
-## 🛠️ Local Development
-
-### Prerequisites
-- Node.js (v18+) & npm.
-- Cloudflare Wrangler CLI (`npm install -g wrangler`).
-- Active Cloudflare account.
-
-### 1. Repository Setup
-```bash
-# Ensure your repository name follows the required prefix
-# git clone <your-repo-link>
-cd cf_ai_cloudfinance
-
-# Backend Configuration (Cloudflare Workers)
-cd apps/backend
-npm install
-
-# Initialize local D1 database with the provided schema
-npx wrangler d1 execute cf_ai_db --local --file=../../data/schema.sql
-
-# Start the local development server
-npm run dev
-
-#Frontend Configuration (React + Vite)
-cd apps/frontend
-npm install
-
-# Run the frontend locally
-npm run dev
-
-#Note: For local development, ensure the API_URL in apps/frontend/src/App.tsx points to http://localhost:8787/api
+**Live demo →** https://cloudfinance-ai.pages.dev
 
 ```
+Email:    demo@cloudfinance.dev
+Password: Demo2024!
+```
 
-## 🌍 Deployment
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| **LLM** | Cloudflare Workers AI — `@cf/meta/llama-3.1-8b-instruct` |
+| **Backend** | Cloudflare Workers + Hono v4 (TypeScript) |
+| **Auth** | JWT (HMAC-SHA256) + PBKDF2 via Web Crypto API — no Node.js deps |
+| **Database** | Cloudflare D1 (SQLite at the edge) |
+| **Frontend** | React 19 + Vite 7 + Tailwind CSS v4 |
+| **State** | Zustand (auth store) + React Router DOM v7 |
+| **Charts** | Recharts |
+| **Hosting** | Cloudflare Pages (SPA) |
+
+---
+
+## Features
+
+- **Natural language input** — type *"spent £45 on dinner"* and Llama 3.1 extracts amount, category, and anomaly flag
+- **JWT authentication** — register/login with access tokens (15 min) + rotating refresh tokens (7 days)
+- **Per-user transaction history** — paginated table with type and category filters
+- **CSV export** — one-click download of all your transactions as RFC 4180 CSV
+- **Spending distribution** — donut chart by category updated on each transaction
+- **Anomaly detection** — AI flags unusually high transactions relative to your spending history
+- **Edge-native** — zero cold-start infrastructure: Workers, D1, Pages, and Workers AI all run on Cloudflare
+
+---
+
+## Local Setup
+
+**Prerequisites:** Node.js 18+, a Cloudflare account, `wrangler` CLI.
+
 ```bash
-#Database & Backend
-# Create and initialize the remote D1 database
-npx wrangler d1 execute cf_ai_db --remote --file=../../data/schema.sql
+# 1. Clone and install backend
+git clone https://github.com/RaulHerrera09/cf_ai_cloudfinance.git
+cd cf_ai_cloudfinance/apps/backend && npm install
 
-# Deploy the Worker
+# 2. Create local D1 and apply migrations
+npx wrangler d1 execute cf_ai_db --local --file=../../data/schema.sql
+npx wrangler d1 migrations apply cf_ai_db --local
+
+# 3. Add JWT secret for local dev (create this file manually — it is gitignored)
+echo 'JWT_SECRET=any-32-char-string-for-local-dev-only' > .dev.vars
+
+# 4. Start the backend Worker
+npm run dev
+
+# 5. Install and start the frontend (new terminal)
+cd ../frontend && npm install && npm run dev
+```
+
+The frontend dev server runs at `http://localhost:5173` and proxies API calls to `http://localhost:8787`.
+
+---
+
+## Deploy to Production
+
+```bash
+# Backend — set the JWT secret once, then deploy
+npx wrangler secret put JWT_SECRET
 cd apps/backend && npm run deploy
 
+# Apply D1 migrations to production
+npx wrangler d1 migrations apply cf_ai_db --remote
 
-#Frontend (Pages)
-# Build the production assets
+# Frontend — build and deploy to Pages
 cd apps/frontend && npm run build
-
-# Deploy to Cloudflare Pages
 npx wrangler pages deploy dist --project-name cloudfinance-ai
-
 ```
 
-## 📂 Project Structure
-```bash
+---
+
+## Project Structure
+
+```
 cf_ai_cloudfinance/
 ├── apps/
-│   ├── backend/    # Cloudflare Worker (Hono + Workers AI + D1)
-│   └── frontend/   # React Dashboard (Tailwind v4 + Recharts)
+│   ├── backend/                  # Cloudflare Worker
+│   │   ├── src/
+│   │   │   ├── routes/           # auth.ts, transactions.ts, export.ts
+│   │   │   ├── middleware/       # auth.ts (JWT verification)
+│   │   │   ├── utils/            # jwt.ts, crypto.ts (Web Crypto only)
+│   │   │   └── db/migrations/    # 0001 users/refresh_tokens, 0002 user_id+type
+│   │   └── wrangler.toml
+│   └── frontend/                 # React SPA
+│       ├── src/
+│       │   ├── components/       # Auth forms, TransactionHistory, ExportButton
+│       │   ├── pages/            # LoginPage, RegisterPage, DashboardPage
+│       │   ├── store/            # auth.ts (Zustand)
+│       │   └── lib/              # api.ts (apiFetch + JWT interceptor)
+│       └── public/_redirects     # Cloudflare Pages SPA routing
 ├── data/
-│   └── schema.sql  # SQL database schema for D1
-├── README.md       # Main documentation
-└── PROMPTS.md      # Detailed AI Prompt Engineering log
-
+│   └── schema.sql                # Original transactions table schema
+├── DEVELOPMENT.md                # Full developer reference
+├── HANDOFF.md                    # Phase status + decisions log
+└── specs/                        # auth.md, transaction-persistence.md, csv-export.md
 ```
 
-## 🔗 Live Demo
-**Look here**: https://84b5031a.cloudfinance-ai.pages.dev/
+---
 
-
-
-**Author**: Raul Herrera 
-
-**Background**: Computer Systems Engineering Student at Universidad Lamar (2024-2026).
-
-**Specialization**: Data Analysis (TripleTen Bootcamp 2025-2026).
-
-**Project Goal**: Demonstrate full-stack AI capabilities using Cloudflare's developer platform.
-
-
+**Author:** Raul Herrera  
+Computer Systems Engineering — Universidad Lamar (2024–2026)  
+Data Analysis Specialization — TripleTen Bootcamp (2025–2026)
