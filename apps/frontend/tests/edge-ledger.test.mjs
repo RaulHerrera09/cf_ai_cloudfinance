@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildCurrencySummaries } from '../../backend/src/utils/transactions.ts';
-import { interpretTransaction } from '../../backend/src/utils/ai-preview.ts';
+import { AIProcessingError, interpretTransaction } from '../../backend/src/utils/ai-preview.ts';
 import { expensePercentage, parseSummaryResponse, toMinorUnits } from '../src/lib/finance.ts';
 import { createMutationGate, shouldSendDeleteRequest } from '../src/lib/interactionGuards.ts';
 import { buildTransactionQuery } from '../src/lib/transactionQuery.ts';
@@ -66,6 +66,19 @@ test('backend AI interpretation returns a draft without any persistence dependen
   assert.equal(draft.amount, 10.24);
   assert.equal(draft.currency, 'GBP');
   assert.equal(draft.type, 'expense');
+});
+
+test('AI model errors are classified without exposing provider details', async () => {
+  await assert.rejects(() => interpretTransaction({ run: async () => { throw new Error('provider secret detail'); } }, 'Hamburguer 150 MXN'), (error) => {
+    assert.equal(error.code, 'AI_MODEL_ERROR');
+    assert.equal(error.message, 'The AI model could not process this preview.');
+    return error instanceof AIProcessingError;
+  });
+});
+
+test('unparseable AI responses and timeouts are classified', async () => {
+  await assert.rejects(() => interpretTransaction({ run: async () => ({ response: 'not json' }) }, 'Hamburguer 150 MXN'), (error) => error.code === 'AI_RESPONSE_PARSE_ERROR');
+  await assert.rejects(() => interpretTransaction({ run: async () => new Promise(() => {}) }, 'Hamburguer 150 MXN', { timeoutMs: 5 }), (error) => error.code === 'AI_TIMEOUT');
 });
 
 test('cancelling deletion never authorizes a destructive request', () => {

@@ -1,113 +1,155 @@
-# CloudFinance AI
+# CloudFinance AI — Personal Edge Ledger
 
-A full-stack financial assistant running entirely on **Cloudflare's global edge network**. Natural language input is parsed by a Llama 3.1 LLM, structured transactions are persisted per-user in a SQLite edge database, and the dashboard renders spending analytics in real time.
+CloudFinance AI es un ledger financiero personal que convierte lenguaje natural en transacciones revisables. La aplicación combina React, Cloudflare Pages, Workers AI y D1 para mantener un flujo claro: describir, revisar y registrar.
 
-**Live demo →** https://cloudfinance-ai.pages.dev
+**Producción:** [cloudfinance-ai.pages.dev](https://cloudfinance-ai.pages.dev)
 
-```
-Email:    demo@cloudfinance.dev
-Password: Demo2024!
-```
+**Deployment verificado:** [e08a5f3f.cloudfinance-ai.pages.dev](https://e08a5f3f.cloudfinance-ai.pages.dev)
 
----
+**API:** [backend.raulherreradelgadillo09.workers.dev](https://backend.raulherreradelgadillo09.workers.dev)
 
-## Tech Stack
+## Qué incluye
 
-| Layer | Technology |
+- Registro e inicio de sesión con JWT y refresh tokens rotatorios.
+- Dashboard Edge Ledger con ingresos, gastos y balance separados.
+- Resúmenes por moneda con selector explícito; nunca se mezclan divisas.
+- Distribución de gastos mediante barras ordenadas y una alternativa tabular accesible.
+- Historial con filtros, paginación y exportación CSV.
+- Alta manual de transacciones.
+- Eliminación mediante confirmación contextual accesible.
+- Estados loading, empty, error y success en las operaciones principales.
+- Diseño responsive y accesible, con controles aptos para teclado y touch.
+
+## Flujo IA
+
+1. El usuario escribe una frase como `Hamburguer 150 MXN`.
+2. `POST /api/analyze/preview` interpreta importe, moneda, tipo, categoría y descripción.
+3. La interfaz muestra una vista previa editable.
+4. Solo al confirmar se crea la transacción mediante `POST /api/transactions`.
+
+El preview no persiste información por sí mismo. El frontend conserva la entrada ante errores, permite reintentar y evita confirmaciones duplicadas o respuestas tardías.
+
+## Stack y despliegue
+
+| Capa | Tecnología |
 |---|---|
-| **LLM** | Cloudflare Workers AI — `@cf/meta/llama-3.1-8b-instruct` |
-| **Backend** | Cloudflare Workers + Hono v4 (TypeScript) |
-| **Auth** | JWT (HMAC-SHA256) + PBKDF2 via Web Crypto API — no Node.js deps |
-| **Database** | Cloudflare D1 (SQLite at the edge) |
-| **Frontend** | React 19 + Vite 7 + Tailwind CSS v4 |
-| **State** | Zustand (auth store) + React Router DOM v7 |
-| **Charts** | Recharts |
-| **Hosting** | Cloudflare Pages (SPA) |
+| Frontend | React 19, TypeScript, Vite 7, Tailwind CSS 4 |
+| Navegación y estado | React Router DOM 7, Zustand 5 |
+| Iconos | Lucide React |
+| Backend | Cloudflare Workers + Hono 4 |
+| IA | Workers AI, `@cf/meta/llama-3.1-8b-instruct-fp8` |
+| Persistencia | Cloudflare D1 (`DB` → `cf_ai_db`) |
+| Hosting | Cloudflare Pages (SPA) |
 
----
+El dashboard se carga mediante `React.lazy`/`Suspense` y code splitting por ruta. El binding de Workers AI es `AI`.
 
-## Features
+## API
 
-- **Natural language input** — type *"spent £45 on dinner"* and Llama 3.1 extracts amount, category, and anomaly flag
-- **JWT authentication** — register/login with access tokens (15 min) + rotating refresh tokens (7 days)
-- **Per-user transaction history** — paginated table with type and category filters
-- **CSV export** — one-click download of all your transactions as RFC 4180 CSV
-- **Spending distribution** — donut chart by category updated on each transaction
-- **Anomaly detection** — AI flags unusually high transactions relative to your spending history
-- **Edge-native** — zero cold-start infrastructure: Workers, D1, Pages, and Workers AI all run on Cloudflare
+Todas las rutas protegidas requieren `Authorization: Bearer <access-token>`.
 
----
+| Método | Ruta | Propósito |
+|---|---|---|
+| POST | `/api/auth/register` | Crear una cuenta |
+| POST | `/api/auth/login` | Iniciar sesión |
+| POST | `/api/auth/refresh` | Renovar tokens |
+| POST | `/api/auth/logout` | Revocar el refresh token |
+| GET | `/api/auth/me` | Obtener el usuario autenticado |
+| POST | `/api/analyze/preview` | Interpretar texto sin persistir; requiere autenticación |
+| POST | `/api/analyze` | Flujo compatible que interpreta y persiste una transacción |
+| GET | `/api/transactions` | Historial paginado y filtrable |
+| GET | `/api/transactions/summary` | Totales agregados por moneda, tipo y categoría |
+| POST | `/api/transactions` | Crear una transacción validada |
+| DELETE | `/api/transactions/:id` | Eliminar una transacción propia |
+| GET | `/api/export/csv` | Exportar el historial como CSV |
 
-## Local Setup
+Los errores de IA usan respuestas estructuradas y mensajes seguros:
 
-**Prerequisites:** Node.js 18+, a Cloudflare account, `wrangler` CLI.
+- `AI_MODEL_ERROR` → HTTP 502.
+- `AI_RESPONSE_PARSE_ERROR` → HTTP 502.
+- `AI_TIMEOUT` → HTTP 504.
+
+Los logs del Worker registran únicamente códigos técnicos; no registran texto del usuario, tokens ni cookies.
+
+## Desarrollo local
+
+Requisitos: Node.js 18+, npm y una cuenta de Cloudflare para probar bindings remotos.
 
 ```bash
-# 1. Clone and install backend
 git clone https://github.com/RaulHerrera09/cf_ai_cloudfinance.git
-cd cf_ai_cloudfinance/apps/backend && npm install
-
-# 2. Create local D1 and apply migrations
-npx wrangler d1 execute cf_ai_db --local --file=../../data/schema.sql
-npx wrangler d1 migrations apply cf_ai_db --local
-
-# 3. Add JWT secret for local dev (create this file manually — it is gitignored)
-echo 'JWT_SECRET=any-32-char-string-for-local-dev-only' > .dev.vars
-
-# 4. Start the backend Worker
+cd cf_ai_cloudfinance/apps/backend
+npm install
 npm run dev
-
-# 5. Install and start the frontend (new terminal)
-cd ../frontend && npm install && npm run dev
 ```
 
-The frontend dev server runs at `http://localhost:5173` and proxies API calls to `http://localhost:8787`.
-
----
-
-## Deploy to Production
+En otra terminal:
 
 ```bash
-# Backend — set the JWT secret once, then deploy
-npx wrangler secret put JWT_SECRET
-cd apps/backend && npm run deploy
+cd cf_ai_cloudfinance/apps/frontend
+npm install
+npm run dev
+```
 
-# Apply D1 migrations to production
-npx wrangler d1 migrations apply cf_ai_db --remote
+El frontend usa `VITE_API_URL` para seleccionar la API. Para una prueba aislada del frontend se puede activar `VITE_USE_MOCKS=true`, que utiliza fixtures locales y no toca producción.
 
-# Frontend — build and deploy to Pages
-cd apps/frontend && npm run build
+## Scripts disponibles
+
+Frontend (`apps/frontend`):
+
+- `npm run dev` — servidor Vite de desarrollo.
+- `npm run build` — typecheck incremental y build de producción.
+- `npm run lint` — ESLint.
+- `npm test` — 11 pruebas automatizadas.
+- `npm run preview` — servir el build local.
+
+Backend (`apps/backend`):
+
+- `npm run dev` — `wrangler dev`.
+- `npm run deploy` — desplegar el Worker con minificación.
+- `npm run cf-typegen` — generar tipos de bindings con Wrangler.
+
+Para publicar Pages después de construir el frontend:
+
+```bash
 npx wrangler pages deploy dist --project-name cloudfinance-ai
 ```
 
----
+## Pruebas cubiertas
 
-## Project Structure
+La suite actual contiene 11 pruebas automatizadas para:
 
-```
+- Preview válido sin persistencia.
+- Fallo de binding/modelo y respuesta no parseable.
+- Timeout y errores estructurados sin filtrar detalles del proveedor.
+- Confirmación única y reintentos sin duplicación.
+- Cancelación de borrado sin petición destructiva.
+- Filtros, paginación y exportación CSV.
+- Separación entre ingresos y gastos.
+- Más de 100 transacciones y monedas separadas.
+
+La confirmación destructiva se valida con fixtures locales para no contaminar datos reales. No se presentan esas pruebas como validaciones sobre dispositivos físicos.
+
+## Estructura
+
+```text
 cf_ai_cloudfinance/
 ├── apps/
-│   ├── backend/                  # Cloudflare Worker
+│   ├── backend/
 │   │   ├── src/
-│   │   │   ├── routes/           # auth.ts, transactions.ts, export.ts
-│   │   │   ├── middleware/       # auth.ts (JWT verification)
-│   │   │   ├── utils/            # jwt.ts, crypto.ts (Web Crypto only)
-│   │   │   └── db/migrations/    # 0001 users/refresh_tokens, 0002 user_id+type
+│   │   │   ├── routes/          # auth, transactions, export
+│   │   │   ├── middleware/      # autenticación JWT
+│   │   │   ├── utils/           # IA, validación y criptografía Web Crypto
+│   │   │   └── db/migrations/   # migraciones D1
 │   │   └── wrangler.toml
-│   └── frontend/                 # React SPA
+│   └── frontend/
 │       ├── src/
-│       │   ├── components/       # Auth forms, TransactionHistory, ExportButton
-│       │   ├── pages/            # LoginPage, RegisterPage, DashboardPage
-│       │   ├── store/            # auth.ts (Zustand)
-│       │   └── lib/              # api.ts (apiFetch + JWT interceptor)
-│       └── public/_redirects     # Cloudflare Pages SPA routing
+│       │   ├── components/      # auth, dashboard y ledger
+│       │   ├── pages/           # login, registro y dashboard
+│       │   ├── lib/             # API, finanzas, filtros y guards
+│       │   ├── mocks/           # fixtures locales
+│       │   └── store/           # estado de autenticación
+│       └── public/              # favicon y redirects de Pages
 ├── data/
-│   └── schema.sql                # Original transactions table schema
-├── DEVELOPMENT.md                # Full developer reference
-├── HANDOFF.md                    # Phase status + decisions log
-└── specs/                        # auth.md, transaction-persistence.md, csv-export.md
+├── specs/
+├── DEVELOPMENT.md
+└── HANDOFF.md
 ```
-
----
-
-

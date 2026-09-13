@@ -7,7 +7,7 @@ import exportRoute from './routes/export';
 import { verifyJWT } from './utils/jwt';
 import { authMiddleware } from './middleware/auth';
 import { TransactionValidationError } from './utils/transactions';
-import { interpretTransaction } from './utils/ai-preview';
+import { AIProcessingError, interpretTransaction } from './utils/ai-preview';
 
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
@@ -31,8 +31,12 @@ app.post('/api/analyze/preview', authMiddleware, async (c) => {
     if (error instanceof TransactionValidationError) {
       return c.json({ success: false, error: error.message, field: error.field }, 400);
     }
-    const message = error instanceof Error ? error.message : 'AI preview failed. Please try again.';
-    return c.json({ success: false, error: message }, 500);
+    if (error instanceof AIProcessingError) {
+      console.error('ai_preview_failed', { code: error.code });
+      return c.json({ success: false, code: error.code, error: error.message }, error.code === 'AI_TIMEOUT' ? 504 : 502);
+    }
+    console.error('ai_preview_failed', { code: 'AI_MODEL_ERROR' });
+    return c.json({ success: false, code: 'AI_MODEL_ERROR', error: 'The AI preview is temporarily unavailable. Please try again.' }, 502);
   }
 });
 
@@ -67,8 +71,13 @@ app.post('/api/analyze', async (c) => {
 
     return c.json({ success: true, data });
 
-  } catch (error: any) {
-    return c.json({ success: false, error: error.message }, 500);
+  } catch (error) {
+    if (error instanceof AIProcessingError) {
+      console.error('ai_analyze_failed', { code: error.code });
+      return c.json({ success: false, code: error.code, error: error.message }, error.code === 'AI_TIMEOUT' ? 504 : 502);
+    }
+    console.error('ai_analyze_failed', { code: 'AI_MODEL_ERROR' });
+    return c.json({ success: false, code: 'AI_MODEL_ERROR', error: 'The AI service is temporarily unavailable. Please try again.' }, 502);
   }
 });
 
