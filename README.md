@@ -1,78 +1,78 @@
 # CloudFinance AI — Personal Edge Ledger
 
-CloudFinance AI es un ledger financiero personal que convierte lenguaje natural en transacciones revisables. La aplicación combina React, Cloudflare Pages, Workers AI y D1 para mantener un flujo claro: describir, revisar y registrar.
+CloudFinance AI is a personal financial ledger that turns natural language into reviewable transactions. The application combines React, Cloudflare Pages, Workers AI, and D1 to maintain a clear workflow: describe, review, and record.
 
-**Producción:** [cloudfinance-ai.pages.dev](https://cloudfinance-ai.pages.dev)
+**Production:** [cloudfinance-ai.pages.dev](https://cloudfinance-ai.pages.dev)
 
-**Deployment verificado:** [e08a5f3f.cloudfinance-ai.pages.dev](https://e08a5f3f.cloudfinance-ai.pages.dev)
+**Verified deployment:** [e08a5f3f.cloudfinance-ai.pages.dev](https://e08a5f3f.cloudfinance-ai.pages.dev)
 
 **API:** [backend.raulherreradelgadillo09.workers.dev](https://backend.raulherreradelgadillo09.workers.dev)
 
-## Qué incluye
+## Included features
 
-- Registro e inicio de sesión con JWT y refresh tokens rotatorios.
-- Dashboard Edge Ledger con ingresos, gastos y balance separados.
-- Resúmenes por moneda con selector explícito; nunca se mezclan divisas.
-- Distribución de gastos mediante barras ordenadas y una alternativa tabular accesible.
-- Historial con filtros, paginación y exportación CSV.
-- Alta manual de transacciones.
-- Eliminación mediante confirmación contextual accesible.
-- Estados loading, empty, error y success en las operaciones principales.
-- Diseño responsive y accesible, con controles aptos para teclado y touch.
+- Registration and login with JWT and rotating refresh tokens.
+- Edge Ledger dashboard with separate income, expense, and balance views.
+- Currency summaries with an explicit selector; currencies are never mixed.
+- Expense breakdown using sorted bars and an accessible tabular alternative.
+- History with filters, pagination, and CSV export.
+- Manual transaction creation.
+- Deletion through accessible contextual confirmation.
+- Loading, empty, error, and success states for primary operations.
+- Responsive and accessible design with keyboard- and touch-friendly controls.
 
-## Flujo IA
+## AI workflow
 
-1. El usuario escribe una frase como `Hamburguer 150 MXN`.
-2. `POST /api/analyze/preview` interpreta importe, moneda, tipo, categoría y descripción.
-3. La interfaz muestra una vista previa editable.
-4. Solo al confirmar se crea la transacción mediante `POST /api/transactions`.
+1. The user writes a phrase such as `Hamburguer 150 MXN`.
+2. `POST /api/analyze/preview` interprets the amount, currency, type, category, and description.
+3. The interface displays an editable preview.
+4. The transaction is created through `POST /api/transactions` only after confirmation.
 
-El preview no persiste información por sí mismo. El frontend conserva la entrada ante errores, permite reintentar y evita confirmaciones duplicadas o respuestas tardías.
+The preview does not persist information by itself. The frontend preserves the input after errors, allows retries, and prevents duplicate confirmations or late responses.
 
-## Stack y despliegue
+## Stack and deployment
 
-| Capa | Tecnología |
+| Layer | Technology |
 |---|---|
 | Frontend | React 19, TypeScript, Vite 7, Tailwind CSS 4 |
-| Navegación y estado | React Router DOM 7, Zustand 5 |
-| Iconos | Lucide React |
+| Navigation and state | React Router DOM 7, Zustand 5 |
+| Icons | Lucide React |
 | Backend | Cloudflare Workers + Hono 4 |
-| IA | Workers AI, `@cf/meta/llama-3.1-8b-instruct-fp8` |
-| Persistencia | Cloudflare D1 (`DB` → `cf_ai_db`) |
+| AI | Workers AI, `@cf/meta/llama-3.1-8b-instruct-fp8` |
+| Persistence | Cloudflare D1 (`DB` → `cf_ai_db`) |
 | Hosting | Cloudflare Pages (SPA) |
 
-El dashboard se carga mediante `React.lazy`/`Suspense` y code splitting por ruta. El binding de Workers AI es `AI`.
+The dashboard is loaded with `React.lazy`/`Suspense` and route-based code splitting. The Workers AI binding is `AI`.
 
 ## API
 
-Todas las rutas protegidas requieren `Authorization: Bearer <access-token>`.
+All protected routes require `Authorization: Bearer <access-token>`.
 
-| Método | Ruta | Propósito |
+| Method | Route | Purpose |
 |---|---|---|
-| POST | `/api/auth/register` | Crear una cuenta |
-| POST | `/api/auth/login` | Iniciar sesión |
-| POST | `/api/auth/refresh` | Renovar tokens |
-| POST | `/api/auth/logout` | Revocar el refresh token |
-| GET | `/api/auth/me` | Obtener el usuario autenticado |
-| POST | `/api/analyze/preview` | Interpretar texto sin persistir; requiere autenticación |
-| POST | `/api/analyze` | Flujo compatible que interpreta y persiste una transacción |
-| GET | `/api/transactions` | Historial paginado y filtrable |
-| GET | `/api/transactions/summary` | Totales agregados por moneda, tipo y categoría |
-| POST | `/api/transactions` | Crear una transacción validada |
-| DELETE | `/api/transactions/:id` | Eliminar una transacción propia |
-| GET | `/api/export/csv` | Exportar el historial como CSV |
+| POST | `/api/auth/register` | Create an account |
+| POST | `/api/auth/login` | Log in |
+| POST | `/api/auth/refresh` | Refresh tokens |
+| POST | `/api/auth/logout` | Revoke the refresh token |
+| GET | `/api/auth/me` | Get the authenticated user |
+| POST | `/api/analyze/preview` | Interpret text without persisting; authentication required |
+| POST | `/api/analyze` | Compatible flow that interprets and persists a transaction |
+| GET | `/api/transactions` | Paginated and filterable history |
+| GET | `/api/transactions/summary` | Aggregated totals by currency, type, and category |
+| POST | `/api/transactions` | Create a validated transaction |
+| DELETE | `/api/transactions/:id` | Delete one of the user's transactions |
+| GET | `/api/export/csv` | Export history as CSV |
 
-Los errores de IA usan respuestas estructuradas y mensajes seguros:
+AI errors use structured responses and safe messages:
 
 - `AI_MODEL_ERROR` → HTTP 502.
 - `AI_RESPONSE_PARSE_ERROR` → HTTP 502.
 - `AI_TIMEOUT` → HTTP 504.
 
-Los logs del Worker registran únicamente códigos técnicos; no registran texto del usuario, tokens ni cookies.
+Worker logs record only technical codes; they do not record user text, tokens, or cookies.
 
-## Desarrollo local
+## Local development
 
-Requisitos: Node.js 18+, npm y una cuenta de Cloudflare para probar bindings remotos.
+Requirements: Node.js 18+, npm, and a Cloudflare account to test remote bindings.
 
 ```bash
 git clone https://github.com/RaulHerrera09/cf_ai_cloudfinance.git
@@ -81,7 +81,7 @@ npm install
 npm run dev
 ```
 
-En otra terminal:
+In another terminal:
 
 ```bash
 cd cf_ai_cloudfinance/apps/frontend
@@ -89,46 +89,46 @@ npm install
 npm run dev
 ```
 
-El frontend usa `VITE_API_URL` para seleccionar la API. Para una prueba aislada del frontend se puede activar `VITE_USE_MOCKS=true`, que utiliza fixtures locales y no toca producción.
+The frontend uses `VITE_API_URL` to select the API. For an isolated frontend test, you can enable `VITE_USE_MOCKS=true`, which uses local fixtures and does not touch production.
 
-## Scripts disponibles
+## Available scripts
 
 Frontend (`apps/frontend`):
 
-- `npm run dev` — servidor Vite de desarrollo.
-- `npm run build` — typecheck incremental y build de producción.
+- `npm run dev` — Vite development server.
+- `npm run build` — Incremental typecheck and production build.
 - `npm run lint` — ESLint.
-- `npm test` — 11 pruebas automatizadas.
-- `npm run preview` — servir el build local.
+- `npm test` — 11 automated tests.
+- `npm run preview` — Serve the local build.
 
 Backend (`apps/backend`):
 
 - `npm run dev` — `wrangler dev`.
-- `npm run deploy` — desplegar el Worker con minificación.
-- `npm run cf-typegen` — generar tipos de bindings con Wrangler.
+- `npm run deploy` — Deploy the Worker with minification.
+- `npm run cf-typegen` — Generate binding types with Wrangler.
 
-Para publicar Pages después de construir el frontend:
+To publish Pages after building the frontend:
 
 ```bash
 npx wrangler pages deploy dist --project-name cloudfinance-ai
 ```
 
-## Pruebas cubiertas
+## Covered tests
 
-La suite actual contiene 11 pruebas automatizadas para:
+The current suite contains 11 automated tests for:
 
-- Preview válido sin persistencia.
-- Fallo de binding/modelo y respuesta no parseable.
-- Timeout y errores estructurados sin filtrar detalles del proveedor.
-- Confirmación única y reintentos sin duplicación.
-- Cancelación de borrado sin petición destructiva.
-- Filtros, paginación y exportación CSV.
-- Separación entre ingresos y gastos.
-- Más de 100 transacciones y monedas separadas.
+- Valid preview without persistence.
+- Binding/model failure and unparseable response.
+- Timeout and structured errors without exposing provider details.
+- Single confirmation and retries without duplication.
+- Delete cancellation without a destructive request.
+- Filters, pagination, and CSV export.
+- Separation between income and expenses.
+- More than 100 transactions and separate currencies.
 
-La confirmación destructiva se valida con fixtures locales para no contaminar datos reales. No se presentan esas pruebas como validaciones sobre dispositivos físicos.
+Destructive confirmation is validated with local fixtures so real data is not contaminated. These tests are not presented as validation on physical devices.
 
-## Estructura
+## Structure
 
 ```text
 cf_ai_cloudfinance/
@@ -136,18 +136,18 @@ cf_ai_cloudfinance/
 │   ├── backend/
 │   │   ├── src/
 │   │   │   ├── routes/          # auth, transactions, export
-│   │   │   ├── middleware/      # autenticación JWT
-│   │   │   ├── utils/           # IA, validación y criptografía Web Crypto
-│   │   │   └── db/migrations/   # migraciones D1
+│   │   │   ├── middleware/      # JWT authentication
+│   │   │   ├── utils/           # AI, validation, and Web Crypto cryptography
+│   │   │   └── db/migrations/   # D1 migrations
 │   │   └── wrangler.toml
 │   └── frontend/
 │       ├── src/
-│       │   ├── components/      # auth, dashboard y ledger
-│       │   ├── pages/           # login, registro y dashboard
-│       │   ├── lib/             # API, finanzas, filtros y guards
-│       │   ├── mocks/           # fixtures locales
-│       │   └── store/           # estado de autenticación
-│       └── public/              # favicon y redirects de Pages
+│       │   ├── components/      # auth, dashboard, and ledger
+│       │   ├── pages/           # login, registration, and dashboard
+│       │   ├── lib/             # API, finance, filters, and guards
+│       │   ├── mocks/           # local fixtures
+│       │   └── store/           # authentication state
+│       └── public/              # favicon and Pages redirects
 ├── data/
 ├── specs/
 ├── DEVELOPMENT.md
