@@ -4,6 +4,14 @@ export const API_URL =
   (import.meta.env.VITE_API_URL as string | undefined) ??
   'https://backend.raulherreradelgadillo09.workers.dev/api';
 
+export async function request(url: string, options: RequestInit = {}): Promise<Response> {
+  if (import.meta.env.VITE_USE_MOCKS === 'true') {
+    const { mockFetch } = await import('../mocks/mockApi');
+    return mockFetch(url, options);
+  }
+  return fetch(url, options);
+}
+
 export function decodeJWT(token: string): { id: string; email: string; name: string } | null {
   try {
     const [, payload] = token.split('.');
@@ -27,10 +35,10 @@ export async function apiFetch(url: string, options: RequestInit = {}): Promise<
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   });
 
-  const res = await fetch(url, { ...options, headers: buildHeaders(accessToken) });
+  const res = await request(url, { ...options, headers: buildHeaders(accessToken) });
   if (res.status !== 401 || !refreshToken) return res;
 
-  const refreshRes = await fetch(`${API_URL}/auth/refresh`, {
+  const refreshRes = await request(`${API_URL}/auth/refresh`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ refreshToken }),
@@ -45,5 +53,5 @@ export async function apiFetch(url: string, options: RequestInit = {}): Promise<
   const { accessToken: newToken, refreshToken: newRefresh } = await refreshRes.json();
   store.setAuth(newToken, newRefresh);
 
-  return fetch(url, { ...options, headers: buildHeaders(newToken) });
+  return request(url, { ...options, headers: buildHeaders(newToken) });
 }

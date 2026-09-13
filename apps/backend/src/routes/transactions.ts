@@ -1,6 +1,8 @@
 import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth';
 import type { Bindings, Variables } from '../types';
+import { normalizeTransactionDraft, TransactionValidationError } from '../utils/transactions';
+import { buildCurrencySummaries, type AggregateRow } from '../utils/transactions';
 
 const transactions = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
@@ -80,49 +82,65 @@ transactions.get('/summary', async (c) => {
   const user = c.get('user');
 
   const { results } = await c.env.DB.prepare(
-    `SELECT category, SUM(amount) as total, COUNT(*) as count
-     FROM transactions WHERE user_id = ? GROUP BY category`
+    `SELECT COALESCE(currency, 'USD') as currency,
+            COALESCE(type, 'expense') as type,
+            COALESCE(category, 'Other') as category,
+            SUM(CAST(ROUND(amount * 100) AS INTEGER)) as total_minor,
+            COUNT(*) as count
+     FROM transactions
+     WHERE user_id = ?
+     GROUP BY COALESCE(currency, 'USD'), COALESCE(type, 'expense'), COALESCE(category, 'Other')`
   )
     .bind(user.id)
-    .all<{ category: string; total: number; count: number }>();
+    .all<AggregateRow>();
 
-  const grandTotal = results.reduce((sum, row) => sum + row.total, 0);
+  const currencies = buildCurrencySummaries(results);
+  const legacyTotals = new Map<string, { category: string; total: number; count: number }>();
+  for (const row of results) {
+    const category = row.category ?? 'Other';
+    const current = legacyTotals.get(category) ?? { category, total: 0, count: 0 };
+    current.total += row.total_minor / 100;
+    current.count += row.count;
+    legacyTotals.set(category, current);
+  }
+  const totals = [...legacyTotals.values()];
+  const grandTotal = totals.reduce((sum, row) => sum + row.total, 0);
 
-  return c.json({ totals: results, grandTotal });
+  return c.json({
+    totals,
+    grandTotal,
+    period: { kind: 'all-time', label: 'All recorded activity' },
+    currencies,
+  });
 });
 
 // POST /api/transactions — create transaction for current user
 transactions.post('/', async (c) => {
   const user = c.get('user');
 
-  let body: { amount?: unknown; description?: unknown; category?: unknown; type?: unknown; currency?: unknown };
+  let body: { amount?: unknown; description?: unknown; category?: unknown; type?: unknown; currency?: unknown; is_anomaly?: unknown };
   try {
     body = await c.req.json();
   } catch {
     return c.json({ error: 'Invalid JSON body' }, 400);
   }
 
-  const { amount, description, category, type, currency } = body;
-
-  if (typeof amount !== 'number' || amount <= 0) {
-    return c.json({ error: 'Amount must be a positive number', field: 'amount' }, 400);
-  }
-  if (typeof category !== 'string' || !category.trim()) {
-    return c.json({ error: 'Category is required', field: 'category' }, 400);
-  }
-  if (type !== 'income' && type !== 'expense') {
-    return c.json({ error: 'Type must be "income" or "expense"', field: 'type' }, 400);
+  let draft;
+  try {
+    draft = normalizeTransactionDraft(body);
+  } catch (error) {
+    if (error instanceof TransactionValidationError) {
+      return c.json({ error: error.message, field: error.field }, 400);
+    }
+    throw error;
   }
 
   const now = new Date().toISOString();
-  const safeDescription = typeof description === 'string' ? description.trim() : null;
-  const safeCurrency = typeof currency === 'string' ? currency.trim() : 'USD';
-
   const result = await c.env.DB.prepare(
     `INSERT INTO transactions (amount, description, category, is_anomaly, currency, user_id, type, created_at)
-     VALUES (?, ?, ?, 0, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   )
-    .bind(amount, safeDescription, category.trim(), safeCurrency, user.id, type, now)
+    .bind(draft.amount, draft.description || null, draft.category, draft.is_anomaly ? 1 : 0, draft.currency, user.id, draft.type, now)
     .run();
 
   return c.json(
@@ -130,13 +148,13 @@ transactions.post('/', async (c) => {
       success: true,
       data: {
         id: result.meta.last_row_id,
-        amount,
-        description: safeDescription,
-        category: category.trim(),
-        type,
-        currency: safeCurrency,
+        amount: draft.amount,
+        description: draft.description || null,
+        category: draft.category,
+        type: draft.type,
+        currency: draft.currency,
         user_id: user.id,
-        is_anomaly: 0,
+        is_anomaly: draft.is_anomaly ? 1 : 0,
         created_at: now,
       },
     },

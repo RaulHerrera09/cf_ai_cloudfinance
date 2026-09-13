@@ -6,8 +6,9 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
   if (isBootstrapping) {
     return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <div className="text-slate-400 text-lg motion-safe:animate-pulse">Loading...</div>
+      <div className="route-loading" role="status" aria-live="polite">
+        <span className="route-loading-mark" />
+        <span>Restoring your secure session…</span>
       </div>
     );
   }

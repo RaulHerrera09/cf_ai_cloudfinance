@@ -1,8 +1,12 @@
-import { useState, useEffect, type FormEvent } from 'react';
-import { Trash2, AlertTriangle, ChevronLeft, ChevronRight, Plus, X, Loader2 } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { AlertTriangle, ChevronLeft, ChevronRight, Filter, LoaderCircle, Plus, ReceiptText, RefreshCw, Trash2, X } from 'lucide-react';
 import { apiFetch, API_URL } from '../../lib/api';
+import { formatMoney, toMinorUnits } from '../../lib/finance';
+import { buildTransactionQuery, type TransactionFilters } from '../../lib/transactionQuery';
+import { createMutationGate, shouldSendDeleteRequest, type DeleteDecision } from '../../lib/interactionGuards';
+import { ExportButton } from './ExportButton';
 
-interface Transaction {
+export type Transaction = {
   id: number;
   amount: number;
   currency: string | null;
@@ -11,389 +15,255 @@ interface Transaction {
   is_anomaly: number;
   created_at: string;
   user_id: string | null;
-  type: string | null;
-}
+  type: 'income' | 'expense' | null;
+};
 
-interface ListResponse {
-  data: Transaction[];
-  total: number;
-  page: number;
-  limit: number;
-}
+type ListResponse = { data: Transaction[]; total: number; page: number; limit: number };
+type ManualDraft = { amount: string; currency: string; category: string; type: 'income' | 'expense'; description: string };
+type ManualErrors = Partial<Record<keyof ManualDraft, string>>;
 
-const CATEGORIES = ['Food', 'Transport', 'Shopping', 'Utilities', 'Other'];
+const CATEGORIES = ['Food & Drinks', 'Transport', 'Housing', 'Utilities', 'Shopping', 'Health & Fitness', 'Education', 'Entertainment', 'Salary', 'Freelance', 'Other'];
 const LIMIT = 10;
+const emptyFilters: TransactionFilters = { type: '', category: '', from: '', to: '' };
+const emptyManual: ManualDraft = { amount: '', currency: 'USD', category: 'Food & Drinks', type: 'expense', description: '' };
 
-interface Props {
-  refreshKey?: number;
+function validateManual(draft: ManualDraft): ManualErrors {
+  const errors: ManualErrors = {};
+  const amount = Number(draft.amount);
+  if (!Number.isFinite(amount) || amount <= 0) errors.amount = 'Enter an amount greater than zero.';
+  if (!/^[A-Z]{3}$/.test(draft.currency)) errors.currency = 'Use a three-letter code such as USD or GBP.';
+  if (!draft.category.trim()) errors.category = 'Choose or enter a category.';
+  if (draft.description.length > 240) errors.description = 'Keep the description to 240 characters or fewer.';
+  return errors;
 }
 
-export function TransactionHistory({ refreshKey = 0 }: Props) {
+export function TransactionHistory({ refreshKey = 0, onDataChanged }: { refreshKey?: number; onDataChanged?: () => void }) {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [isLoading, setIsLoading] = useState(true);
-  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [error, setError] = useState<string | null>(null);
-
-  const [filterType, setFilterType] = useState('');
-  const [filterCategory, setFilterCategory] = useState('');
-  const [filterFrom, setFilterFrom] = useState('');
-  const [filterTo, setFilterTo] = useState('');
-
+  const [notice, setNotice] = useState<string | null>(null);
+  const [filters, setFilters] = useState<TransactionFilters>(emptyFilters);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
-  const [addAmount, setAddAmount] = useState('');
-  const [addDescription, setAddDescription] = useState('');
-  const [addCategory, setAddCategory] = useState('Food');
-  const [addType, setAddType] = useState<'income' | 'expense'>('expense');
+  const [manual, setManual] = useState<ManualDraft>(emptyManual);
+  const [manualErrors, setManualErrors] = useState<ManualErrors>({});
   const [isAdding, setIsAdding] = useState(false);
-  const [addError, setAddError] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Transaction | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [expandedDescriptions, setExpandedDescriptions] = useState<Set<number>>(new Set());
+  const requestSequence = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
+  const amountRef = useRef<HTMLInputElement>(null);
+  const currencyRef = useRef<HTMLInputElement>(null);
+  const categoryRef = useRef<HTMLInputElement>(null);
+  const deleteDialogRef = useRef<HTMLDivElement>(null);
+  const cancelDeleteRef = useRef<HTMLButtonElement>(null);
+  const deleteReturnRef = useRef<HTMLButtonElement | null>(null);
+  const deleteGate = useRef(createMutationGate());
 
-  const fetchTransactions = async (p: number) => {
-    setIsLoading(true);
+  const fetchTransactions = useCallback(async (requestedPage: number) => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const sequence = ++requestSequence.current;
+    setStatus('loading');
     setError(null);
     try {
-      const params = new URLSearchParams({ page: String(p), limit: String(LIMIT) });
-      if (filterType) params.set('type', filterType);
-      if (filterCategory) params.set('category', filterCategory);
-      if (filterFrom) params.set('from', filterFrom);
-      if (filterTo) params.set('to', filterTo);
-
-      const res = await apiFetch(`${API_URL}/transactions?${params}`);
-      if (!res.ok) throw new Error('Failed to load transactions');
-      const json: ListResponse = await res.json();
-      setTransactions(json.data ?? []);
-      setTotal(json.total ?? 0);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Failed to load transactions');
-    } finally {
-      setIsLoading(false);
+      const query = buildTransactionQuery(requestedPage, LIMIT, filters);
+      const response = await apiFetch(`${API_URL}/transactions?${query}`, { signal: controller.signal });
+      if (!response.ok) throw new Error('Your ledger could not be loaded.');
+      const payload: ListResponse = await response.json();
+      if (sequence !== requestSequence.current) return;
+      setTransactions(payload.data ?? []);
+      setTotal(payload.total ?? 0);
+      setStatus('ready');
+    } catch (caught) {
+      if (controller.signal.aborted) return;
+      setError(caught instanceof Error ? caught.message : 'Your ledger could not be loaded.');
+      setStatus('error');
     }
-  };
+  }, [filters]);
 
   useEffect(() => {
     setPage(1);
-  }, [filterType, filterCategory, filterFrom, filterTo, refreshKey]);
+  }, [filters, refreshKey]);
 
   useEffect(() => {
-    fetchTransactions(page);
-  }, [page, filterType, filterCategory, filterFrom, filterTo, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
+    void fetchTransactions(page);
+    return () => abortRef.current?.abort();
+  }, [fetchTransactions, page, refreshKey]);
 
-  const handleDelete = async (id: number) => {
-    setDeletingId(id);
-    try {
-      const res = await apiFetch(`${API_URL}/transactions/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Delete failed');
-      setTransactions((prev) => prev.filter((t) => t.id !== id));
-      setTotal((prev) => prev - 1);
-    } catch {
-      setError('Could not delete transaction. Please try again.');
-    } finally {
-      setDeletingId(null);
-    }
+  useEffect(() => {
+    if (!pendingDelete) return;
+    cancelDeleteRef.current?.focus();
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !deleteGate.current.isPending()) {
+        event.preventDefault();
+        setPendingDelete(null);
+      }
+      if (event.key === 'Tab' && deleteDialogRef.current) {
+        const controls = [...deleteDialogRef.current.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
+        const first = controls[0];
+        const last = controls.at(-1);
+        if (!first || !last) return;
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+        if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      }
+    };
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('keydown', handleKey);
+      window.setTimeout(() => deleteReturnRef.current?.focus(), 0);
+    };
+  }, [pendingDelete]);
+
+  const updateFilter = (key: keyof TransactionFilters, value: string) => setFilters((current) => ({ ...current, [key]: value }));
+  const updateManual = <K extends keyof ManualDraft>(key: K, value: ManualDraft[K]) => {
+    setManual((current) => ({ ...current, [key]: value }));
+    setManualErrors((current) => ({ ...current, [key]: undefined }));
   };
+  const validateManualField = (field: keyof ManualDraft) => setManualErrors((current) => ({ ...current, [field]: validateManual(manual)[field] }));
 
-  const handleAdd = async (e: FormEvent) => {
-    e.preventDefault();
-    setAddError(null);
-    const amount = parseFloat(addAmount);
-    if (isNaN(amount) || amount <= 0) {
-      setAddError('Enter a valid positive amount');
+  const handleAdd = async (event: FormEvent) => {
+    event.preventDefault();
+    if (isAdding) return;
+    const errors = validateManual(manual);
+    setManualErrors(errors);
+    const first = Object.keys(errors)[0] as keyof ManualDraft | undefined;
+    if (first) {
+      if (first === 'amount') amountRef.current?.focus();
+      if (first === 'currency') currencyRef.current?.focus();
+      if (first === 'category') categoryRef.current?.focus();
       return;
     }
     setIsAdding(true);
+    setNotice(null);
     try {
-      const res = await apiFetch(`${API_URL}/transactions`, {
+      const response = await apiFetch(`${API_URL}/transactions`, {
         method: 'POST',
-        body: JSON.stringify({
-          amount,
-          description: addDescription.trim() || null,
-          category: addCategory,
-          type: addType,
-        }),
+        body: JSON.stringify({ ...manual, amount: Number(manual.amount) }),
       });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error ?? 'Failed to add transaction');
-      }
-      setAddAmount('');
-      setAddDescription('');
-      setAddCategory('Food');
-      setAddType('expense');
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error ?? 'The transaction could not be recorded.');
+      setManual(emptyManual);
       setShowAddForm(false);
+      setNotice('Transaction recorded in the ledger.');
       setPage(1);
       await fetchTransactions(1);
-    } catch (e: unknown) {
-      setAddError(e instanceof Error ? e.message : 'Failed to add');
+      onDataChanged?.();
+    } catch (caught) {
+      setNotice(null);
+      setManualErrors((current) => ({ ...current, amount: caught instanceof Error ? caught.message : 'The transaction could not be recorded.' }));
     } finally {
       setIsAdding(false);
     }
   };
 
-  const totalPages = Math.ceil(total / LIMIT);
-
-  const formatDate = (iso: string) => {
+  const handleDeleteDecision = async (decision: DeleteDecision) => {
+    if (!shouldSendDeleteRequest(decision)) {
+      setPendingDelete(null);
+      return;
+    }
+    if (!pendingDelete || !deleteGate.current.begin()) return;
+    setIsDeleting(true);
+    setError(null);
     try {
-      return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-    } catch {
-      return iso;
+      const response = await apiFetch(`${API_URL}/transactions/${pendingDelete.id}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error('The transaction could not be deleted.');
+      setTransactions((current) => current.filter((transaction) => transaction.id !== pendingDelete.id));
+      setTotal((current) => Math.max(0, current - 1));
+      setNotice('Transaction deleted.');
+      setPendingDelete(null);
+      onDataChanged?.();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'The transaction could not be deleted.');
+    } finally {
+      deleteGate.current.end();
+      setIsDeleting(false);
     }
   };
 
-  const inputCls =
-    'bg-slate-800/50 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500/50 transition';
+  const totalPages = Math.max(1, Math.ceil(total / LIMIT));
+  const hasFilters = Object.values(filters).some(Boolean);
+  const formatDate = (iso: string) => new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(iso));
 
   return (
-    <section className="bg-slate-900/80 backdrop-blur-xl rounded-2xl border border-white/10 overflow-hidden shadow-xl">
-      {/* Header */}
-      <div className="p-6 border-b border-white/5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-xl font-semibold flex items-center gap-2">
-            <span className="bg-blue-500/20 text-blue-400 p-2 rounded-lg text-base" aria-hidden>📜</span>
-            Transaction History
-          </h2>
-          <button
-            onClick={() => setShowAddForm((v) => !v)}
-            aria-expanded={showAddForm}
-            aria-controls="add-form"
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 border border-white/10 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition min-h-[44px]"
-          >
-            {showAddForm ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
-            {showAddForm ? 'Cancel' : 'Add Transaction'}
-          </button>
+    <section className="ledger" aria-labelledby="ledger-title">
+      <div className="ledger-heading">
+        <div className="section-heading">
+          <span className="section-icon" aria-hidden="true"><ReceiptText size={20} /></span>
+          <div><p className="eyebrow">Verified records</p><h2 id="ledger-title">Transaction ledger</h2></div>
         </div>
-
-        {/* Inline Add Form */}
-        {showAddForm && (
-          <form
-            id="add-form"
-            onSubmit={handleAdd}
-            aria-label="Add transaction form"
-            className="mt-4 p-4 bg-slate-800/50 rounded-xl border border-white/5 space-y-3"
-          >
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <div>
-                <label htmlFor="add-amount" className="block text-xs text-slate-400 mb-1">Amount</label>
-                <input
-                  id="add-amount"
-                  type="number"
-                  min="0.01"
-                  step="0.01"
-                  value={addAmount}
-                  onChange={(e) => setAddAmount(e.target.value)}
-                  placeholder="0.00"
-                  className={inputCls + ' w-full'}
-                  required
-                />
-              </div>
-              <div>
-                <label htmlFor="add-type" className="block text-xs text-slate-400 mb-1">Type</label>
-                <select
-                  id="add-type"
-                  value={addType}
-                  onChange={(e) => setAddType(e.target.value as 'income' | 'expense')}
-                  className={inputCls + ' w-full'}
-                >
-                  <option value="expense">Expense</option>
-                  <option value="income">Income</option>
-                </select>
-              </div>
-              <div>
-                <label htmlFor="add-category" className="block text-xs text-slate-400 mb-1">Category</label>
-                <select
-                  id="add-category"
-                  value={addCategory}
-                  onChange={(e) => setAddCategory(e.target.value)}
-                  className={inputCls + ' w-full'}
-                >
-                  {CATEGORIES.map((c) => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label htmlFor="add-desc" className="block text-xs text-slate-400 mb-1">Description</label>
-                <input
-                  id="add-desc"
-                  type="text"
-                  value={addDescription}
-                  onChange={(e) => setAddDescription(e.target.value)}
-                  placeholder="Optional"
-                  className={inputCls + ' w-full'}
-                />
-              </div>
-            </div>
-            {addError && <p role="alert" className="text-xs text-red-400">{addError}</p>}
-            <button
-              type="submit"
-              disabled={isAdding}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50 transition min-h-[44px]"
-            >
-              {isAdding ? <Loader2 className="w-4 h-4 motion-safe:animate-spin" /> : <Plus className="w-4 h-4" />}
-              {isAdding ? 'Saving…' : 'Save'}
-            </button>
-          </form>
-        )}
-
-        {/* Filters */}
-        <div className="mt-4 flex flex-wrap gap-2">
-          <select
-            value={filterType}
-            onChange={(e) => setFilterType(e.target.value)}
-            aria-label="Filter by type"
-            className={inputCls}
-          >
-            <option value="">All types</option>
-            <option value="income">Income</option>
-            <option value="expense">Expense</option>
-          </select>
-          <select
-            value={filterCategory}
-            onChange={(e) => setFilterCategory(e.target.value)}
-            aria-label="Filter by category"
-            className={inputCls}
-          >
-            <option value="">All categories</option>
-            {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-          <input
-            type="date"
-            value={filterFrom}
-            onChange={(e) => setFilterFrom(e.target.value)}
-            aria-label="From date"
-            className={inputCls}
-          />
-          <input
-            type="date"
-            value={filterTo}
-            onChange={(e) => setFilterTo(e.target.value)}
-            aria-label="To date"
-            className={inputCls}
-          />
-          {(filterType || filterCategory || filterFrom || filterTo) && (
-            <button
-              onClick={() => { setFilterType(''); setFilterCategory(''); setFilterFrom(''); setFilterTo(''); }}
-              className="px-3 py-2 text-xs text-slate-400 hover:text-slate-200 transition"
-              aria-label="Clear filters"
-            >
-              Clear filters
-            </button>
-          )}
+        <div className="ledger-actions">
+          <ExportButton />
+          <button className="button button-secondary" type="button" onClick={() => setShowAddForm((value) => !value)} aria-expanded={showAddForm} aria-controls="manual-entry-form">
+            {showAddForm ? <X size={18} /> : <Plus size={18} />}{showAddForm ? 'Close entry' : 'Manual entry'}
+          </button>
         </div>
       </div>
 
-      {/* Table */}
-      {error && (
-        <p role="alert" className="p-4 text-sm text-red-400 text-center">{error}</p>
+      {showAddForm && (
+        <form id="manual-entry-form" className="manual-form" onSubmit={handleAdd} noValidate>
+          <div className="manual-form-heading"><div><p className="eyebrow">Direct entry</p><h3>Add without AI</h3></div><p>Every field is saved exactly as reviewed.</p></div>
+          <div className="manual-grid">
+            <div className="field"><label htmlFor="manual-amount">Amount</label><input ref={amountRef} id="manual-amount" type="number" inputMode="decimal" min="0.01" step="0.01" value={manual.amount} onChange={(e) => updateManual('amount', e.target.value)} onBlur={() => validateManualField('amount')} aria-invalid={Boolean(manualErrors.amount)} aria-describedby={manualErrors.amount ? 'manual-amount-error' : undefined} />{manualErrors.amount && <p id="manual-amount-error" className="field-error">{manualErrors.amount}</p>}</div>
+            <div className="field"><label htmlFor="manual-currency">Currency</label><input ref={currencyRef} id="manual-currency" value={manual.currency} maxLength={3} onChange={(e) => updateManual('currency', e.target.value.toUpperCase())} onBlur={() => validateManualField('currency')} aria-invalid={Boolean(manualErrors.currency)} aria-describedby={manualErrors.currency ? 'manual-currency-error' : undefined} />{manualErrors.currency && <p id="manual-currency-error" className="field-error">{manualErrors.currency}</p>}</div>
+            <div className="field"><label htmlFor="manual-type">Type</label><select id="manual-type" value={manual.type} onChange={(e) => updateManual('type', e.target.value as ManualDraft['type'])}><option value="expense">Expense</option><option value="income">Income</option></select></div>
+            <div className="field"><label htmlFor="manual-category">Category</label><input ref={categoryRef} id="manual-category" list="manual-categories" value={manual.category} onChange={(e) => updateManual('category', e.target.value)} onBlur={() => validateManualField('category')} aria-invalid={Boolean(manualErrors.category)} aria-describedby={manualErrors.category ? 'manual-category-error' : undefined} />{manualErrors.category && <p id="manual-category-error" className="field-error">{manualErrors.category}</p>}</div>
+            <div className="field field-wide"><label htmlFor="manual-description">Description <span>optional</span></label><input id="manual-description" value={manual.description} maxLength={240} onChange={(e) => updateManual('description', e.target.value)} onBlur={() => validateManualField('description')} aria-invalid={Boolean(manualErrors.description)} aria-describedby={manualErrors.description ? 'manual-description-error' : undefined} />{manualErrors.description && <p id="manual-description-error" className="field-error">{manualErrors.description}</p>}</div>
+          </div>
+          <datalist id="manual-categories">{CATEGORIES.map((category) => <option value={category} key={category} />)}</datalist>
+          <div className="form-actions"><button className="button button-primary" disabled={isAdding}>{isAdding ? <LoaderCircle className="spin" size={18} /> : <Plus size={18} />}{isAdding ? 'Recording…' : 'Record entry'}</button></div>
+        </form>
       )}
 
-      {isLoading ? (
-        <div className="p-12 flex justify-center">
-          <Loader2 className="w-8 h-8 text-slate-500 motion-safe:animate-spin" />
+      <div className="filter-bar">
+        <button className="button button-filter" type="button" onClick={() => setFiltersOpen((value) => !value)} aria-expanded={filtersOpen} aria-controls="ledger-filters"><Filter size={18} />Filters{hasFilters && <span className="filter-indicator">Active</span>}</button>
+        <div className={`filters ${filtersOpen ? 'open' : ''}`} id="ledger-filters">
+          <label>Type<select value={filters.type} onChange={(e) => updateFilter('type', e.target.value)}><option value="">All types</option><option value="income">Income</option><option value="expense">Expense</option></select></label>
+          <label>Category<select value={filters.category} onChange={(e) => updateFilter('category', e.target.value)}><option value="">All categories</option>{CATEGORIES.map((category) => <option key={category}>{category}</option>)}</select></label>
+          <label>From<input type="date" value={filters.from} onChange={(e) => updateFilter('from', e.target.value)} /></label>
+          <label>To<input type="date" value={filters.to} onChange={(e) => updateFilter('to', e.target.value)} /></label>
+          {hasFilters && <button className="button button-text" type="button" onClick={() => setFilters(emptyFilters)}>Clear filters</button>}
         </div>
-      ) : transactions.length === 0 ? (
-        <div className="p-12 text-center text-slate-500 space-y-2">
-          <p className="text-lg">No transactions yet.</p>
-          <p className="text-sm">Add your first transaction to get started.</p>
-        </div>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm" role="table">
-            <thead>
-              <tr className="border-b border-white/5 text-left">
-                <th scope="col" className="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Date</th>
-                <th scope="col" className="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Type</th>
-                <th scope="col" className="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Category</th>
-                <th scope="col" className="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-slate-500 text-right">Amount</th>
-                <th scope="col" className="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Description</th>
-                <th scope="col" className="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-slate-500 text-right sr-only">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(transactions ?? []).map((t) => (
-                <tr
-                  key={t.id}
-                  className="border-b border-white/5 last:border-0 hover:bg-white/5 transition-colors"
-                  tabIndex={0}
-                >
-                  <td className="px-6 py-4 text-slate-400 whitespace-nowrap">{formatDate(t.created_at)}</td>
-                  <td className="px-4 py-4">
-                    <span
-                      className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${
-                        t.type === 'income'
-                          ? 'bg-emerald-500/20 text-emerald-400'
-                          : 'bg-red-500/20 text-red-400'
-                      }`}
-                    >
-                      {t.type ?? '—'}
-                    </span>
-                  </td>
-                  <td className="px-4 py-4">
-                    <span className="text-xs font-bold uppercase tracking-wider text-slate-500 bg-slate-800 px-2 py-1 rounded-md">
-                      {t.category ?? '—'}
-                    </span>
-                  </td>
-                  <td className="px-4 py-4 text-right font-semibold text-indigo-300 whitespace-nowrap">
-                    {t.type === 'income' ? '+' : '-'}
-                    {t.currency ?? 'USD'} {t.amount.toFixed(2)}
-                    {Boolean(t.is_anomaly) && (
-                      <AlertTriangle
-                        className="inline ml-1.5 w-3.5 h-3.5 text-red-400 motion-safe:animate-pulse"
-                        aria-label="Anomaly detected"
-                      />
-                    )}
-                  </td>
-                  <td className="px-4 py-4 text-slate-300 max-w-[200px] truncate">
-                    {t.description ?? <span className="text-slate-600 italic">No description</span>}
-                  </td>
-                  <td className="px-4 py-4 text-right">
-                    <button
-                      onClick={() => handleDelete(t.id)}
-                      disabled={deletingId === t.id}
-                      aria-label={`Delete transaction: ${t.description ?? t.id}`}
-                      className="p-2 rounded-lg text-slate-600 hover:text-red-400 hover:bg-red-950/30 focus:outline-none focus:ring-1 focus:ring-red-500 disabled:opacity-40 transition min-h-[44px] min-w-[44px] flex items-center justify-center"
-                    >
-                      {deletingId === t.id ? (
-                        <Loader2 className="w-4 h-4 motion-safe:animate-spin" />
-                      ) : (
-                        <Trash2 className="w-4 h-4" />
-                      )}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
+      </div>
+
+      <div className="live-region" aria-live="polite" aria-atomic="true">{notice}</div>
+      {status === 'error' && <div className="notice notice-error ledger-notice" role="alert"><span>{error}</span><button className="button button-secondary" onClick={() => void fetchTransactions(page)}><RefreshCw size={17} />Retry</button></div>}
+      {status === 'loading' && <div className="ledger-loading" aria-busy="true" aria-label="Loading transactions"><div className="skeleton-row" /><div className="skeleton-row" /><div className="skeleton-row" /></div>}
+      {status === 'ready' && transactions.length === 0 && <div className="empty-state"><ReceiptText size={28} /><h3>{hasFilters ? 'No matching entries' : 'Your ledger is ready'}</h3><p>{hasFilters ? 'Adjust or clear the filters to see other records.' : 'Use the AI composer or manual entry to record your first transaction.'}</p>{hasFilters && <button className="button button-secondary" onClick={() => setFilters(emptyFilters)}>Clear filters</button>}</div>}
+      {status === 'ready' && transactions.length > 0 && (
+        <div className="table-scroll" tabIndex={0} aria-label="Scrollable transaction table">
+          <table className="data-table ledger-table">
+            <caption className="sr-only">Transactions, newest first</caption>
+            <thead><tr><th scope="col">Date</th><th scope="col">Type</th><th scope="col">Category</th><th scope="col">Amount</th><th scope="col">Description</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
+            <tbody>{transactions.map((transaction) => {
+              const expanded = expandedDescriptions.has(transaction.id);
+              const description = transaction.description || 'No description';
+              const currency = transaction.currency || 'USD';
+              const amount = formatMoney(toMinorUnits(transaction.amount), currency);
+              return <tr key={transaction.id}>
+                <td data-label="Date">{formatDate(transaction.created_at)}</td>
+                <td data-label="Type"><span className={`type-chip ${transaction.type === 'income' ? 'income' : 'expense'}`}>{transaction.type === 'income' ? 'Income' : 'Expense'}</span></td>
+                <td data-label="Category"><span className="category-label">{transaction.category || 'Other'}</span></td>
+                <td data-label="Amount" className="money"><span className={transaction.type === 'income' ? 'income-text' : 'expense-text'}>{transaction.type === 'income' ? '+' : '−'} {amount}</span>{Boolean(transaction.is_anomaly) && <span className="anomaly"><AlertTriangle size={15} />Anomaly</span>}</td>
+                <td data-label="Description"><button className={`description-toggle ${expanded ? 'expanded' : ''}`} type="button" onClick={() => setExpandedDescriptions((current) => { const next = new Set(current); if (next.has(transaction.id)) next.delete(transaction.id); else next.add(transaction.id); return next; })} aria-expanded={expanded}>{description}</button></td>
+                <td className="row-action"><button className="icon-button danger" type="button" aria-label={`Delete ${description}, ${amount}`} onClick={(event) => { deleteReturnRef.current = event.currentTarget; setPendingDelete(transaction); }}><Trash2 size={18} /></button></td>
+              </tr>;
+            })}</tbody>
           </table>
         </div>
       )}
 
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="px-6 py-4 border-t border-white/5 flex items-center justify-between text-sm text-slate-400">
-          <span>{total} transaction{total !== 1 ? 's' : ''}</span>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={page <= 1}
-              aria-label="Previous page"
-              className="p-2 rounded-lg hover:bg-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-30 transition min-h-[44px] min-w-[44px] flex items-center justify-center"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-            <span>
-              {page} / {totalPages}
-            </span>
-            <button
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={page >= totalPages}
-              aria-label="Next page"
-              className="p-2 rounded-lg hover:bg-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-30 transition min-h-[44px] min-w-[44px] flex items-center justify-center"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      )}
+      {status === 'ready' && total > 0 && <div className="pagination"><span>{total} transaction{total === 1 ? '' : 's'}</span><div><button className="icon-button" type="button" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={page === 1} aria-label="Previous page"><ChevronLeft size={19} /></button><span><b>{page}</b> of {totalPages}</span><button className="icon-button" type="button" onClick={() => setPage((value) => Math.min(totalPages, value + 1))} disabled={page >= totalPages} aria-label="Next page"><ChevronRight size={19} /></button></div></div>}
+
+      {pendingDelete && <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !isDeleting) setPendingDelete(null); }}><div className="confirm-dialog" ref={deleteDialogRef} role="alertdialog" aria-modal="true" aria-labelledby="delete-title" aria-describedby="delete-description">
+        <span className="dialog-icon" aria-hidden="true"><Trash2 size={22} /></span><p className="eyebrow">Permanent action</p><h2 id="delete-title">Delete this transaction?</h2><p id="delete-description"><strong>{pendingDelete.description || pendingDelete.category || 'Transaction'}</strong><br />{formatMoney(toMinorUnits(pendingDelete.amount), pendingDelete.currency || 'USD')} · {pendingDelete.type === 'income' ? 'Income' : 'Expense'}</p><p>This removes the record permanently. It cannot be undone.</p>
+        {error && <p className="field-error" role="alert">{error}</p>}
+        <div className="dialog-actions"><button ref={cancelDeleteRef} className="button button-secondary" type="button" disabled={isDeleting} onClick={() => void handleDeleteDecision('cancel')}>Cancel</button><button className="button button-danger" type="button" disabled={isDeleting} onClick={() => void handleDeleteDecision('confirm')}>{isDeleting ? <LoaderCircle className="spin" size={18} /> : <Trash2 size={18} />}{isDeleting ? 'Deleting…' : 'Delete transaction'}</button></div>
+      </div></div>}
     </section>
   );
 }

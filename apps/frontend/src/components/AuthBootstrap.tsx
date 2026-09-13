@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useAuthStore } from '../store/auth';
-import { API_URL, decodeJWT } from '../lib/api';
+import { API_URL, decodeJWT, request } from '../lib/api';
 
 export function AuthBootstrap({ children }: { children: React.ReactNode }) {
   const { refreshToken, setAuth, clearAuth, setBootstrapping } = useAuthStore();
@@ -11,7 +11,7 @@ export function AuthBootstrap({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    fetch(`${API_URL}/auth/refresh`, {
+    request(`${API_URL}/auth/refresh`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refreshToken }),
